@@ -13,6 +13,12 @@ uv run tl-uurtjes login   # one-time browser login to Orbit
 ./install.sh              # installs + starts the systemd user timer
 ```
 
+The repo can live anywhere: `install.sh` writes the checkout's absolute path into the installed
+service. If you move or re-clone the repo, run `./install.sh` again from the new location.
+
+Logins are per machine: everyone runs `uv run tl-uurtjes login` once for the app, and `/mcp` →
+`teamleader-orbit` in Claude Code if they want Claude to use Orbit too.
+
 ## Using the popup
 
 - Type to filter tasks, ↑/↓ to choose; ★ marks tasks you logged recently.
