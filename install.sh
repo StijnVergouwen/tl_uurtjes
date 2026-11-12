@@ -4,7 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 uv sync
 mkdir -p ~/.config/systemd/user
-cp systemd/tl-uurtjes.service systemd/tl-uurtjes.timer ~/.config/systemd/user/
+sed "s|@REPO@|$PWD|g" systemd/tl-uurtjes.service > ~/.config/systemd/user/tl-uurtjes.service
+cp systemd/tl-uurtjes.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now tl-uurtjes.timer
 systemctl --user list-timers tl-uurtjes.timer
