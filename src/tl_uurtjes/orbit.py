@@ -20,10 +20,11 @@ from mcp.shared.auth import (
     OAuthToken,
 )
 
+from .core import CONFIG_DIR
+
 MCP_URL = "https://api.orbit.teamleader.eu/mcp"
 CALLBACK_PORT = 8765
 REDIRECT_URI = f"http://127.0.0.1:{CALLBACK_PORT}/callback"
-CONFIG_DIR = Path.home() / ".config" / "tl_uurtjes"
 
 
 class FileTokenStorage(TokenStorage):
@@ -62,6 +63,10 @@ class FileTokenStorage(TokenStorage):
         data = self._load()
         data["client"] = client_info.model_dump(mode="json", exclude_none=True)
         self._save(data)
+
+
+def is_logged_in() -> bool:
+    return bool(FileTokenStorage()._load().get("tokens"))
 
 
 async def _open_browser(url: str) -> None:

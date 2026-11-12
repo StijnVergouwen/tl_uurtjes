@@ -1,32 +1,33 @@
 """The hourly popup: walks through every unlogged hour of today and books it in Orbit."""
 
-import os
 import threading
+import time
 import tkinter as tk
 from datetime import datetime, timedelta
 from tkinter import messagebox, ttk
 
 from . import orbit
 from .core import (
+    DRY_RUN,
+    FAKE_NOW,
     Entry,
+    SettingsError,
     Task,
+    WorkHours,
     entry_ending_at,
     load_skipped,
+    load_work_hours,
     parse_entries,
     parse_tasks,
     pending_slots,
+    now,
     recent_task_ids,
+    save_last_reminder,
     save_skipped,
 )
 
-# TL_UURTJES_DRY_RUN=1 prints the writes instead of sending them to Orbit.
-DRY_RUN = os.environ.get("TL_UURTJES_DRY_RUN") == "1"
-
-
-def now() -> datetime:
-    """The current time; TL_UURTJES_NOW="2026-11-12 13:05" fakes it for testing."""
-    fake = os.environ.get("TL_UURTJES_NOW")
-    return datetime.fromisoformat(fake) if fake else datetime.now()
+FETCH_ATTEMPTS = 3  # scheduled runs: right after waking up the network may not be back yet
+FETCH_RETRY_SECONDS = 20
 
 
 def fetch_entries(date_from, date_to) -> list[Entry]:
@@ -51,11 +52,12 @@ def book_hour(slot: datetime, task: Task, description: str, entries: list[Entry]
 
 
 class Popup:
-    def __init__(self, root: tk.Tk, tasks: list[Task], entries: list[Entry]):
+    def __init__(self, root: tk.Tk, tasks: list[Task], entries: list[Entry], hours: WorkHours):
         self.root = root
         self.entries = entries
+        self.hours = hours
         self.skipped = load_skipped()
-        self.slots = pending_slots(now(), entries, self.skipped)
+        self.slots = pending_slots(now(), entries, self.skipped, hours)
         self.done = 0
 
         recent = recent_task_ids(entries)
@@ -175,7 +177,7 @@ class Popup:
     def _show_slot(self) -> None:
         if not self.slots:
             # New hours may have ended while this window was open.
-            self.slots = pending_slots(now(), self.entries, self.skipped)
+            self.slots = pending_slots(now(), self.entries, self.skipped, self.hours)
             if not self.slots:
                 self.root.destroy()
                 return
@@ -261,20 +263,52 @@ class Popup:
         self.root.after(100, poll)
 
 
-def run() -> None:
-    today = now().date()
+def show_error(message: str) -> None:
+    root = tk.Tk(className="tl-uurtjes")
+    root.withdraw()
+    messagebox.showerror("Teamleader uurtjes", message)
+    root.destroy()
+
+
+def fetch_start_data(today, attempts: int) -> tuple[str, list[Entry]]:
+    """Tasks + the last two weeks of entries, retrying because the network may lag behind a wake-up."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return orbit.call("ListMyTasks"), fetch_entries(today - timedelta(days=14), today)
+        except Exception:
+            if attempt == attempts:
+                raise
+            time.sleep(FETCH_RETRY_SECONDS)
+
+
+def run(scheduled: bool = False) -> None:
+    """scheduled=True is the hourly systemd timer, which already checked that a popup is due."""
+    started = now()
     try:
-        tasks_text = orbit.call("ListMyTasks")
-        entries = fetch_entries(today - timedelta(days=14), today)
-    except Exception as e:
-        root = tk.Tk(className="tl-uurtjes")
-        root.withdraw()
-        messagebox.showerror("Teamleader uurtjes", f"Could not reach Teamleader Orbit:\n\n{e}")
+        hours = load_work_hours()
+    except SettingsError as e:
+        show_error(str(e))
         return
 
-    if not pending_slots(now(), entries, load_skipped()):
+    error = None
+    if not orbit.is_logged_in():
+        # Don't let a background timer open a browser login out of nowhere.
+        error = "You're not logged in to Teamleader Orbit yet.\n\nRun `uv run tl-uurtjes login` in the tl_uurtjes folder."
+    else:
+        try:
+            tasks_text, entries = fetch_start_data(started.date(), FETCH_ATTEMPTS if scheduled else 1)
+        except Exception as e:
+            error = f"Could not reach Teamleader Orbit:\n\n{e}"
+
+    # Saved once Orbit was tried (not before), so a run that dies early still gets its catch-up later.
+    if scheduled and not (FAKE_NOW or DRY_RUN):
+        save_last_reminder(started)
+    if error:
+        show_error(error)
+        return
+    if not pending_slots(started, entries, load_skipped(), hours):
         return
 
     root = tk.Tk(className="tl-uurtjes")
-    Popup(root, parse_tasks(tasks_text), entries)
+    Popup(root, parse_tasks(tasks_text), entries, hours)
     root.mainloop()
