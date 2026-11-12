@@ -4,4 +4,4 @@ Description=Ask which Teamleader Orbit task I worked on
 [Service]
 Type=oneshot
 # @REPO@ is replaced with the checkout's absolute path by install.sh.
-ExecStart=@REPO@/.venv/bin/tl-uurtjes
+ExecStart=@REPO@/.venv/bin/tl-uurtjes scheduled

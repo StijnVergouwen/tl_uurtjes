@@ -10,8 +10,10 @@ from . import orbit
 from .core import (
     Entry,
     Task,
+    WorkHours,
     entry_ending_at,
     load_skipped,
+    load_work_hours,
     parse_entries,
     parse_tasks,
     pending_slots,
@@ -51,11 +53,12 @@ def book_hour(slot: datetime, task: Task, description: str, entries: list[Entry]
 
 
 class Popup:
-    def __init__(self, root: tk.Tk, tasks: list[Task], entries: list[Entry]):
+    def __init__(self, root: tk.Tk, tasks: list[Task], entries: list[Entry], hours: WorkHours):
         self.root = root
         self.entries = entries
+        self.hours = hours
         self.skipped = load_skipped()
-        self.slots = pending_slots(now(), entries, self.skipped)
+        self.slots = pending_slots(now(), entries, self.skipped, hours)
         self.done = 0
 
         recent = recent_task_ids(entries)
@@ -175,7 +178,7 @@ class Popup:
     def _show_slot(self) -> None:
         if not self.slots:
             # New hours may have ended while this window was open.
-            self.slots = pending_slots(now(), self.entries, self.skipped)
+            self.slots = pending_slots(now(), self.entries, self.skipped, self.hours)
             if not self.slots:
                 self.root.destroy()
                 return
@@ -261,7 +264,11 @@ class Popup:
         self.root.after(100, poll)
 
 
-def run() -> None:
+def run(scheduled: bool = False) -> None:
+    """scheduled=True (the hourly systemd timer) stays quiet outside your working hours."""
+    hours = load_work_hours()
+    if scheduled and not hours.is_reminder_time(now()):
+        return
     today = now().date()
     try:
         tasks_text = orbit.call("ListMyTasks")
@@ -272,9 +279,9 @@ def run() -> None:
         messagebox.showerror("Teamleader uurtjes", f"Could not reach Teamleader Orbit:\n\n{e}")
         return
 
-    if not pending_slots(now(), entries, load_skipped()):
+    if not pending_slots(now(), entries, load_skipped(), hours):
         return
 
     root = tk.Tk(className="tl-uurtjes")
-    Popup(root, parse_tasks(tasks_text), entries)
+    Popup(root, parse_tasks(tasks_text), entries, hours)
     root.mainloop()

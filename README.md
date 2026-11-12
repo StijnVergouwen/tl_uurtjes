@@ -1,7 +1,8 @@
 # tl-uurtjes
 
-Every hour on workdays (10:00 … 18:00) a small window asks which Teamleader Orbit task you
-worked on the previous hour, and walks you through every hour since 9:00 that isn't logged yet.
+At the end of every work hour a small window asks which Teamleader Orbit task you worked on,
+and walks you through every hour of today that isn't logged yet. Your working hours and
+workdays are personal: you set them once (default Mon–Fri, 9:00–18:00).
 
 It talks to the official Orbit MCP server (`https://api.orbit.teamleader.eu/mcp`) with your own
 OAuth login; tokens live in `~/.config/tl_uurtjes/oauth.json`.
@@ -10,8 +11,12 @@ OAuth login; tokens live in `~/.config/tl_uurtjes/oauth.json`.
 
 ```bash
 uv run tl-uurtjes login   # one-time browser login to Orbit
-./install.sh              # installs + starts the systemd user timer
+./install.sh              # asks your working hours, installs + starts the systemd user timer
 ```
+
+Working hours are stored in `~/.config/tl_uurtjes/settings.json`. To change them later, run
+`uv run tl-uurtjes setup` again (Enter keeps the current value); no reinstall needed.
+Hours are whole hours, e.g. start `8` and end `17` gives the slots 8:00–9:00 … 16:00–17:00.
 
 The repo can live anywhere: `install.sh` writes the checkout's absolute path into the installed
 service. If you move or re-clone the repo, run `./install.sh` again from the new location.

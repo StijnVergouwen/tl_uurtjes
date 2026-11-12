@@ -2,9 +2,15 @@ import sys
 
 
 def main() -> None:
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "popup"
+    if cmd == "setup":
+        from .configure import setup
+
+        setup()
+        return
+
     from . import orbit
 
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "popup"
     if cmd == "login":
         orbit.list_tools()
         print("Logged in to Teamleader Orbit.")
@@ -16,4 +22,4 @@ def main() -> None:
     else:
         from .app import run
 
-        run()
+        run(scheduled=cmd == "scheduled")

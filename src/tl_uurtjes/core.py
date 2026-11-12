@@ -2,15 +2,72 @@
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-WORK_START_HOUR = 9
-WORK_END_HOUR = 18
-WORKDAYS = range(0, 5)  # Monday..Friday
-
+CONFIG_DIR = Path.home() / ".config" / "tl_uurtjes"
+SETTINGS_FILE = CONFIG_DIR / "settings.json"
 STATE_FILE = Path.home() / ".local" / "state" / "tl_uurtjes" / "skipped.json"
+
+
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+
+
+def write_json(path: Path, data) -> None:
+    """Writes via a temp file + rename, so an interrupted save never leaves a half-written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(path)
+
+
+@dataclass(frozen=True)
+class WorkHours:
+    """Personal working hours; set once with `tl-uurtjes setup`."""
+
+    start_hour: int = 9
+    end_hour: int = 18
+    workdays: tuple[int, ...] = (0, 1, 2, 3, 4)  # 0 = Monday
+
+    def __post_init__(self):
+        if not 0 <= self.start_hour < self.end_hour <= 23:
+            raise ValueError(f"working hours must satisfy 0 <= start < end <= 23, got {self.start_hour}-{self.end_hour}")
+        if not self.workdays or any(d not in range(7) for d in self.workdays):
+            raise ValueError(f"invalid workdays: {self.workdays}")
+
+    def is_reminder_time(self, now: datetime) -> bool:
+        """The hourly timer only pops up at the end of a work hour (start+1 ... end) on a workday."""
+        return now.weekday() in self.workdays and self.start_hour < now.hour <= self.end_hour
+
+
+def parse_workdays(text: str) -> tuple[int, ...]:
+    """'1-5' -> Mon..Fri, '1,2,4' -> Mon,Tue,Thu; 1 = Monday, 7 = Sunday."""
+    days: set[int] = set()
+    for part in text.replace(" ", "").split(","):
+        if not part:
+            continue
+        lo, _, hi = part.partition("-")
+        first, last = int(lo), int(hi or lo)
+        if not 1 <= first <= last <= 7:
+            raise ValueError(f"invalid day range: {part!r} (use 1 = Monday ... 7 = Sunday)")
+        days.update(range(first - 1, last))
+    if not days:
+        raise ValueError("no workdays given")
+    return tuple(sorted(days))
+
+
+def load_work_hours(path: Path = SETTINGS_FILE) -> WorkHours:
+    raw = read_json(path, {})
+    return WorkHours(**{**raw, "workdays": tuple(raw["workdays"])}) if raw else WorkHours()
+
+
+def save_work_hours(hours: WorkHours, path: Path = SETTINGS_FILE) -> None:
+    write_json(path, asdict(hours))
 
 
 @dataclass(frozen=True)
@@ -86,11 +143,11 @@ def parse_entries(text: str) -> list[Entry]:
     return entries
 
 
-def slots_for(day: date) -> list[datetime]:
+def slots_for(day: date, hours: WorkHours) -> list[datetime]:
     """Start times of the hourly slots on a workday."""
-    if day.weekday() not in WORKDAYS:
+    if day.weekday() not in hours.workdays:
         return []
-    return [datetime.combine(day, datetime.min.time()).replace(hour=h) for h in range(WORK_START_HOUR, WORK_END_HOUR)]
+    return [datetime.combine(day, datetime.min.time()).replace(hour=h) for h in range(hours.start_hour, hours.end_hour)]
 
 
 def is_covered(slot: datetime, entries: list[Entry]) -> bool:
@@ -99,11 +156,11 @@ def is_covered(slot: datetime, entries: list[Entry]) -> bool:
     return any(e.start < end and e.end > slot for e in entries)
 
 
-def pending_slots(now: datetime, entries: list[Entry], skipped: set[datetime]) -> list[datetime]:
+def pending_slots(now: datetime, entries: list[Entry], skipped: set[datetime], hours: WorkHours) -> list[datetime]:
     """Today's hours that have ended but are neither logged in Orbit nor skipped."""
     return [
         s
-        for s in slots_for(now.date())
+        for s in slots_for(now.date(), hours)
         if s + timedelta(hours=1) <= now and s not in skipped and not is_covered(s, entries)
     ]
 
@@ -123,14 +180,10 @@ def recent_task_ids(entries: list[Entry]) -> list[str]:
 
 
 def load_skipped(path: Path = STATE_FILE) -> set[datetime]:
-    try:
-        return {datetime.fromisoformat(s) for s in json.loads(path.read_text())}
-    except FileNotFoundError:
-        return set()
+    return {datetime.fromisoformat(s) for s in read_json(path, [])}
 
 
 def save_skipped(skipped: set[datetime], path: Path = STATE_FILE) -> None:
     # Only keep the last two weeks around.
     cutoff = datetime.now() - timedelta(days=14)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(sorted(s.isoformat() for s in skipped if s > cutoff)))
+    write_json(path, sorted(s.isoformat() for s in skipped if s > cutoff))
