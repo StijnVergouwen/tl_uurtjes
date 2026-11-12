@@ -1,13 +1,22 @@
 from datetime import datetime
 
+import pytest
+
 from tl_uurtjes.core import (
+    SettingsError,
     WorkHours,
     entry_ending_at,
+    load_last_reminder,
+    load_skipped,
+    load_work_hours,
     parse_duration,
     parse_entries,
+    parse_hour,
     parse_tasks,
+    parse_workdays,
     pending_slots,
     recent_task_ids,
+    save_work_hours,
 )
 
 TASKS = """14 assignable task(s):
@@ -75,19 +84,42 @@ def test_custom_work_hours():
     now = datetime(2026, 11, 12, 15, 0)  # Thursday afternoon
     assert pending_slots(now, [], set(), hours) == [datetime(2026, 11, 12, h) for h in (8, 9, 10, 11)]
     assert pending_slots(datetime(2026, 11, 11, 15), [], set(), hours) == []  # Wednesday is off
-    # The hourly timer only pops up at the end of a work hour (9:00 ... 12:00) on a workday.
-    assert [h for h in range(24) if hours.is_reminder_time(datetime(2026, 11, 12, h))] == [9, 10, 11, 12]
-    assert not hours.is_reminder_time(datetime(2026, 11, 11, 10))  # Wednesday
+
+
+def test_should_remind_at_end_of_each_work_hour():
+    hours = WorkHours(start_hour=8, end_hour=12, workdays=(0, 1, 3))
+    # Timer fires every hour on the hour; the previous run popped up an hour earlier.
+    due = [h for h in range(1, 24) if hours.should_remind(datetime(2026, 11, 12, h), datetime(2026, 11, 12, h - 1, 0, 2))]
+    assert due == [9, 10, 11, 12]
+    assert not hours.should_remind(datetime(2026, 11, 11, 10), None)  # Wednesday is off
+    # A second run within the same hour (e.g. on wake, then on the hour) doesn't pop up twice.
+    assert not hours.should_remind(datetime(2026, 11, 12, 10, 40), datetime(2026, 11, 12, 10, 15))
+
+
+def test_catch_up_after_hours():
+    hours = WorkHours()  # Mon-Fri 9-18
+    # Laptop was asleep at 18:00: the first run after hours still pops up ...
+    assert hours.should_remind(datetime(2026, 11, 12, 19, 30), datetime(2026, 11, 12, 17, 0, 2))
+    assert hours.should_remind(datetime(2026, 11, 12, 19, 30), None)
+    # ... but once it has popped up at or after 18:00, the evening stays quiet.
+    assert not hours.should_remind(datetime(2026, 11, 12, 20, 0), datetime(2026, 11, 12, 19, 30))
+    assert not hours.should_remind(datetime(2026, 11, 12, 19, 0), datetime(2026, 11, 12, 18, 0, 2))
+    # Nothing before the first work hour has ended.
+    assert not hours.should_remind(datetime(2026, 11, 12, 7, 0), None)
+    assert not hours.should_remind(datetime(2026, 11, 12, 9, 30), None)
+
+
+def test_parse_hour():
+    assert [parse_hour(t) for t in ("8", "08", "8:00", "17u", "17h", " 9 ")] == [8, 8, 8, 17, 17, 9]
+    for bad in ("8:30", "24", "acht", "", "-1"):
+        with pytest.raises(ValueError):
+            parse_hour(bad)
 
 
 def test_parse_workdays():
-    import pytest
-
-    from tl_uurtjes.core import parse_workdays
-
     assert parse_workdays("1-5") == (0, 1, 2, 3, 4)
     assert parse_workdays("1-3, 5") == (0, 1, 2, 4)
-    for bad in ("0", "8", "5-1", ""):
+    for bad in ("0", "8", "5-1", "", "ma-vr", "1-5-7"):
         with pytest.raises(ValueError):
             parse_workdays(bad)
     with pytest.raises(ValueError):
@@ -95,9 +127,25 @@ def test_parse_workdays():
 
 
 def test_work_hours_roundtrip(tmp_path):
-    from tl_uurtjes.core import load_work_hours, save_work_hours
-
     path = tmp_path / "settings.json"
     assert load_work_hours(path) == WorkHours()  # defaults when not set up yet
     save_work_hours(WorkHours(8, 17, (0, 1, 2, 3)), path)
     assert load_work_hours(path) == WorkHours(8, 17, (0, 1, 2, 3))
+
+
+def test_broken_settings_give_a_clear_error(tmp_path):
+    path = tmp_path / "settings.json"
+    for content in ("{not json", '{"start_hour": 9}', '{"start_hour": 9, "end_hour": 8, "workdays": [0]}', "[]"):
+        path.write_text(content)
+        with pytest.raises(SettingsError, match="tl-uurtjes setup"):
+            load_work_hours(path)
+
+
+def test_corrupt_state_files_are_ignored(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text("{oops")
+    assert load_skipped(path) == set()
+    assert load_last_reminder(path) is None
+    path.write_text("42")
+    assert load_skipped(path) == set()
+    assert load_last_reminder(path) is None

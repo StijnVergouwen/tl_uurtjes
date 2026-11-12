@@ -65,6 +65,10 @@ class FileTokenStorage(TokenStorage):
         self._save(data)
 
 
+def is_logged_in() -> bool:
+    return bool(FileTokenStorage()._load().get("tokens"))
+
+
 async def _open_browser(url: str) -> None:
     print(f"Opening Orbit login in your browser:\n{url}", flush=True)
     webbrowser.open(url)

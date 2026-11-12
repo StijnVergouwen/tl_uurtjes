@@ -1,32 +1,53 @@
 """`tl-uurtjes setup`: asks for your working hours once and saves them."""
 
-from .core import SETTINGS_FILE, WorkHours, load_work_hours, parse_workdays, save_work_hours
+import sys
+
+from .core import SETTINGS_FILE, SettingsError, WorkHours, load_work_hours, parse_hour, parse_workdays, save_work_hours
 
 
-def _ask(prompt: str, default: str, parse):
+def _ask(prompt: str, default, parse):
+    """Asks until the answer parses; Enter keeps the default."""
     while True:
         try:
-            return parse(input(f"{prompt} [{default}]: ").strip() or default)
+            return parse(input(f"{prompt} [{default}]: ").strip() or str(default))
         except ValueError as e:
             print(f"  {e}")
+
+
+def _hour_between(lo: int, hi: int):
+    def parse(text: str) -> int:
+        hour = parse_hour(text)
+        if not lo <= hour <= hi:
+            raise ValueError(f"use an hour from {lo} to {hi}")
+        return hour
+
+    return parse
 
 
 def setup() -> None:
-    current = load_work_hours()
-    while True:
-        try:
-            # WorkHours itself validates the combination; on an error all three are asked again.
-            hours = WorkHours(
-                _ask("Start of your working day (hour)", str(current.start_hour), int),
-                _ask("End of your working day (hour, max 23)", str(current.end_hour), int),
-                _ask(
-                    "Workdays (1 = Monday ... 7 = Sunday, e.g. 1-5 or 1-3,5)",
-                    ",".join(str(d + 1) for d in current.workdays),
-                    parse_workdays,
-                ),
-            )
-            break
-        except ValueError as e:
-            print(f"  {e}")
+    try:
+        current = load_work_hours()
+    except SettingsError as e:
+        print(f"Your saved settings are invalid ({e.__cause__}); starting from the defaults.\n")
+        current = WorkHours()
+
+    print("When do you work? The popup asks about every whole hour in between.")
+    try:
+        start = _ask("Start of your working day (hour, e.g. 9)", current.start_hour, _hour_between(0, 22))
+        end = _ask(
+            "End of your working day (hour, e.g. 17)",
+            current.end_hour if current.end_hour > start else start + 1,
+            _hour_between(start + 1, 23),
+        )
+        workdays = _ask(
+            "Workdays (1 = Monday ... 7 = Sunday, e.g. 1-5 or 1-3,5)",
+            ",".join(str(d + 1) for d in current.workdays),
+            parse_workdays,
+        )
+    except (KeyboardInterrupt, EOFError):
+        print("\nCancelled, nothing saved.")
+        sys.exit(1)
+
+    hours = WorkHours(start, end, workdays)
     save_work_hours(hours)
-    print(f"Saved to {SETTINGS_FILE}; the popup follows these hours from now on.")
+    print(f"Saved to {SETTINGS_FILE}. Change it any time with `uv run tl-uurtjes setup`.")
