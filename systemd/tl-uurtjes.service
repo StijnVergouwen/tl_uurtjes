@@ -1,0 +1,6 @@
+[Unit]
+Description=Ask which Teamleader Orbit task I worked on
+
+[Service]
+Type=oneshot
+ExecStart=%h/repos/tl_uurtjes/.venv/bin/tl-uurtjes

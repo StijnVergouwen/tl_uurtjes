@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Teamleader Orbit time-logging popup (workdays 9:00-18:00)
+
+[Timer]
+# Fires at the end of each work hour: 10:00 asks about 9-10, ..., 18:00 asks about 17-18.
+OnCalendar=Mon..Fri 10..18:00:00
+# Fire on wake/boot when a run was missed; the popup then walks through every open hour.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
