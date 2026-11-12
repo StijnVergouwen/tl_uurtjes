@@ -3,6 +3,7 @@ from datetime import datetime
 import pytest
 
 from tl_uurtjes.core import (
+    day_overview,
     SettingsError,
     WorkHours,
     entry_ending_at,
@@ -149,3 +150,17 @@ def test_corrupt_state_files_are_ignored(tmp_path):
     path.write_text("42")
     assert load_skipped(path) == set()
     assert load_last_reminder(path) is None
+
+
+def test_day_overview():
+    entries = parse_entries(ENTRIES)
+    skipped = {datetime(2026, 11, 11, 17)}
+    day = day_overview(datetime(2026, 11, 11, 18, 0), entries, skipped, WorkHours())
+    assert [s.start.hour for s in day] == list(range(9, 18))
+    assert day[0].state == "logged" and day[0].task_id == "TASK00000000003"
+    assert day[1].task_id == "TASK00000000001"
+    assert day[-1].state == "skipped"
+    # Mid-morning without entries: ended hours are open, the rest still to come.
+    day = day_overview(datetime(2026, 11, 11, 11, 30), [], set(), WorkHours())
+    assert [s.state for s in day[:4]] == ["open", "open", "future", "future"]
+    assert day_overview(datetime(2026, 11, 14, 12), [], set(), WorkHours()) == []

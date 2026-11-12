@@ -203,6 +203,28 @@ def pending_slots(now: datetime, entries: list[Entry], skipped: set[datetime], h
     ]
 
 
+@dataclass(frozen=True)
+class SlotStatus:
+    start: datetime
+    state: str  # "logged", "skipped", "open" (ended, still to log) or "future"
+    task_id: str | None = None
+
+
+def day_overview(now: datetime, entries: list[Entry], skipped: set[datetime], hours: WorkHours) -> list[SlotStatus]:
+    """Every work hour of today with what happened in it, for the day column in the popup."""
+    overview = []
+    for s in slots_for(now.date(), hours):
+        end = s + timedelta(hours=1)
+        entry = next((e for e in entries if e.start < end and e.end > s), None)
+        if entry:
+            overview.append(SlotStatus(s, "logged", entry.task_id))
+        elif s in skipped:
+            overview.append(SlotStatus(s, "skipped"))
+        else:
+            overview.append(SlotStatus(s, "open" if end <= now else "future"))
+    return overview
+
+
 def entry_ending_at(slot: datetime, entries: list[Entry]) -> Entry | None:
     """The entry that ends exactly where this slot starts, if any."""
     return next((e for e in entries if e.end == slot), None)
