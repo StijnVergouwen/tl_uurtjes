@@ -3,6 +3,7 @@
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import datetime, timedelta
 from tkinter import messagebox, ttk
 
@@ -14,6 +15,7 @@ from .core import (
     SettingsError,
     Task,
     WorkHours,
+    day_overview,
     entry_ending_at,
     load_skipped,
     load_work_hours,
@@ -28,6 +30,15 @@ from .core import (
 
 FETCH_ATTEMPTS = 3  # scheduled runs: right after waking up the network may not be back yet
 FETCH_RETRY_SECONDS = 20
+
+# Day column: one row per work hour, (fill, text colour) per state.
+DAY_COLORS = {
+    "logged": ("#2e9e6b", "white"),
+    "open": ("#f3c969", "#5a4500"),
+    "skipped": ("#d5d5d5", "#777"),
+    "future": ("#f4f4f4", "#aaa"),
+}
+CURRENT_OUTLINE = "#2d6cdf"
 
 
 def fetch_entries(date_from, date_to) -> list[Entry]:
@@ -64,6 +75,7 @@ class Popup:
         rank = {tid: i for i, tid in enumerate(recent)}
         self.tasks = sorted(tasks, key=lambda t: rank.get(t.id, len(rank)))
         self.recent = set(recent[:5])
+        self.task_by_id = {t.id: t for t in tasks}
         self.visible: list[Task] = []
 
         self._build()
@@ -93,13 +105,28 @@ class Popup:
         self.subtitle = ttk.Label(frame, style="Sub.TLabel")
         self.subtitle.pack(anchor="w", pady=(0, 10))
 
-        ttk.Label(frame, text="Search task").pack(anchor="w")
+        body = ttk.Frame(frame)
+        body.pack(fill="both", expand=True)
+        day_frame = ttk.Frame(body)
+        day_frame.pack(side="left", fill="y", padx=(0, 16))
+        ttk.Label(day_frame, text="Today").pack(anchor="w")
+        self.day_font = tkfont.nametofont("TkDefaultFont").copy()
+        self.day_font.configure(size=9)
+        self.day = tk.Canvas(day_frame, width=220, highlightthickness=0, background=style.lookup("TFrame", "background"))
+        self.day.pack(fill="y", expand=True, pady=(2, 4))
+        self.day.bind("<Configure>", lambda _: self._draw_day())
+        self.day_summary = ttk.Label(day_frame, style="Sub.TLabel")
+        self.day_summary.pack(anchor="w")
+        right = ttk.Frame(body)
+        right.pack(side="left", fill="both", expand=True)
+
+        ttk.Label(right, text="Search task").pack(anchor="w")
         self.query = tk.StringVar()
         self.query.trace_add("write", lambda *_: self._filter())
-        self.search = ttk.Entry(frame, textvariable=self.query)
+        self.search = ttk.Entry(right, textvariable=self.query)
         self.search.pack(fill="x", pady=(2, 6))
 
-        list_frame = ttk.Frame(frame)
+        list_frame = ttk.Frame(right)
         list_frame.pack(fill="both", expand=True)
         self.listbox = tk.Listbox(
             list_frame, height=14, width=78, activestyle="none", exportselection=False,
@@ -111,9 +138,9 @@ class Popup:
         scroll.pack(side="right", fill="y")
         self.listbox.bind("<Double-Button-1>", lambda _: self._log())
 
-        ttk.Label(frame, text="Description (optional)").pack(anchor="w", pady=(10, 0))
+        ttk.Label(right, text="Description (optional)").pack(anchor="w", pady=(10, 0))
         self.description = tk.StringVar()
-        self.desc_entry = ttk.Entry(frame, textvariable=self.description)
+        self.desc_entry = ttk.Entry(right, textvariable=self.description)
         self.desc_entry.pack(fill="x", pady=(2, 10))
 
         self.status = ttk.Label(frame, style="Error.TLabel", wraplength=560)
@@ -172,6 +199,45 @@ class Popup:
         current = self.listbox.curselection()
         return self.visible[current[0]] if current and current[0] < len(self.visible) else None
 
+    # --- day column ---------------------------------------------------------
+
+    def _draw_day(self) -> None:
+        """Today at a glance, top to bottom: each hour shows its task, the hour being asked is outlined."""
+        day = day_overview(now(), self.entries, self.skipped, self.hours)
+        current = self.slots[0] if self.slots else None
+        c = self.day
+        c.delete("all")
+        if not day:
+            return
+        gap, label_w = 3, 40
+        width = c.winfo_width() if c.winfo_width() > 1 else int(c.cget("width"))
+        row = min(30, (max(c.winfo_height(), 200) - gap * (len(day) - 1)) / len(day))
+        for i, s in enumerate(day):
+            y = i * (row + gap)
+            fill, fg = DAY_COLORS[s.state]
+            outline, line = (CURRENT_OUTLINE, 3) if s.start == current else ("", 0)
+            c.create_text(0, y + row / 2, text=f"{s.start:%H:%M}", anchor="w", fill="#666", font=self.day_font)
+            c.create_rectangle(label_w + 1, y + 1, width - 2, y + row - 1, fill=fill, outline=outline, width=line)
+            c.create_text(label_w + 8, y + row / 2, text=self._fit(self._slot_text(s), width - label_w - 16),
+                          anchor="w", fill=fg, font=self.day_font)
+        logged = sum(s.state == "logged" for s in day)
+        open_ = sum(s.state == "open" for s in day)
+        self.day_summary.configure(text=f"{logged}h logged  ·  {open_}h open")
+
+    def _slot_text(self, s) -> str:
+        if s.state == "logged":
+            task = self.task_by_id.get(s.task_id)
+            return task.name if task else "Logged"
+        return {"open": "To log", "skipped": "Didn't work"}.get(s.state, "")
+
+    def _fit(self, text: str, width: int) -> str:
+        """Cuts text with an ellipsis so it fits in `width` pixels."""
+        if self.day_font.measure(text) <= width:
+            return text
+        while text and self.day_font.measure(text + "…") > width:
+            text = text[:-1]
+        return text.rstrip() + "…"
+
     # --- flow ---------------------------------------------------------------
 
     def _show_slot(self) -> None:
@@ -196,6 +262,7 @@ class Popup:
         self._filter(keep=prev.task_id if prev else None)
         self.description.set(prev.description if prev else "")
         self.status.configure(text="")
+        self._draw_day()
         self.root.deiconify()
         self.root.lift()
         self.search.focus_force()

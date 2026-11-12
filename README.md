@@ -16,6 +16,9 @@ cd tl_uurtjes
 
 ## Use
 
+The column on the left shows your day: green = logged (with the task name), yellow = still to log,
+grey = didn't work, blank = still to come. The hour you're answering is outlined.
+
 | Key | Action |
 |---|---|
 | type, ↑/↓ | find a task (★ = recently used) |
